@@ -32,14 +32,14 @@ def create_app(config = config_dict['dev']):
 
     api = Api(
         app,
-        title='Student Management API',
-        description='A simple Student Management REST API service',
+        title='Scissor API',
+        description='A simple Scissor REST API service',
         authorizations=authorizations,
         security='Bearer Auth'
         )
     api.add_namespace(auth_namespace)
     api.add_namespace(url_namespace)
-    
+
     @app.shell_context_processor
     def make_shell_context():
         return{
