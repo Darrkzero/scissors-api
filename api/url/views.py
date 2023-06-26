@@ -1,4 +1,4 @@
-from flask import send_file
+from flask import send_file, request
 from flask_restx import Namespace, Resource, fields
 from ..models.url import Url
 from ..models.user import User
@@ -9,6 +9,9 @@ import string
 import random
 import requests
 import qrcode
+import re
+from urllib.parse import urlparse
+
 
 url_namespace = Namespace("url", description="name space for url")
 
@@ -23,8 +26,9 @@ url_model = url_namespace.model(
 # Define a model for the URL customization request
 url_customization_model = url_namespace.model('URLCustomization', {
     "title": fields.String(required =True, description = "A url title"),
-    'custom_domain': fields.String(required=True, description='Custom domain name'),
-    'url_path': fields.String(required=True, description='Custom URL path')
+    'main_url': fields.String(required=True, description='A url'),
+    'custom_url': fields.String(required=True, description='Custom url name'),
+    
 })
 
 # view model for viewing the shortened url 
@@ -39,6 +43,16 @@ view_model = url_namespace.model(
         "date_created": fields.String(required =True, description = "the shortened url creation date"),
     }
 )
+
+def is_valid_url(url):
+    regex = re.compile(
+        r'^(?:http|ftp)s?://'  # scheme
+        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|'  # domain...
+        r'localhost|'  # localhost...
+        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # ...or IP
+        r'(?::\d+)?'  # optional port
+        r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+    return bool(regex.match(url))
 
 
 def shorten_url(long_url):
@@ -83,36 +97,35 @@ class ShortUrl(Resource):
         data = url_namespace.payload
 
         current_user = User.query.filter_by(email=email).first()
-        # shorten_url(data["main_url"])
+        
         if data["main_url"]:
-            try:  
-                response = requests.head(data["main_url"])
-                if response.status_code == requests.codes.ok:
-                    url_db = Url.query.filter_by(long_url = data["main_url"]).first()
+            if is_valid_url(data["main_url"]):
+                url_db = Url.query.filter_by(long_url = data["main_url"]).first()
 
-                    if url_db:
-                        return url_db, HTTPStatus.OK
+                if url_db:
+                    return url_db, HTTPStatus.OK
                     
-                    else:
-                        short_key = shorten_url(data["main_url"])
-                        short_url = f"https://darrkzero.pythonanywhere.com/{short_key}"
-                        new_url = Url(
-                                url_code = short_key,
-                                title = data["title"],
-                                long_url = data["main_url"],
-                                short_url = short_url,
-                                user_id = current_user.id
-                            )
-                        try:
-                            new_url.save()
-                            return new_url, HTTPStatus.CREATED
+                else:   
+                    o = urlparse(request.base_url)
+                    short_key = shorten_url(data["main_url"])
+                    short_url = f"{o.netloc}/{short_key}"
+                    new_url = Url(
+                            url_code = short_key,
+                            title = data["title"],
+                            long_url = data["main_url"],
+                            short_url = short_url,
+                            user_id = current_user.id
+                        )
+                    try:
+                        new_url.save()
+                        return new_url, HTTPStatus.CREATED
                         
-                        except:
-                            db.session.rollback()
-                            response = { 'message' : 'An error occurred'} 
-                            return response , HTTPStatus.INTERNAL_SERVER_ERROR 
+                    except:
+                        db.session.rollback()
+                        response = { 'message' : 'An error occurred'} 
+                        return response , HTTPStatus.INTERNAL_SERVER_ERROR 
                     
-            except requests.exceptions.RequestException:
+            else:
                 response=   {"message":"Invalid Url"}
                 return response , HTTPStatus.BAD_REQUEST
 
@@ -125,25 +138,28 @@ class URLCustomizationResource(Resource):
     @url_namespace.marshal_with(view_model)
     def post(self):
         """
-        Customize the shortened URL with a custom domain and URL path
+        Customize the shortened URL with a custom URL
         """
         email = get_jwt_identity()
         # Parse the request data
         data = url_namespace.payload
-        custom_domain = data['custom_domain']
-        url_path = data['url_path']
+        custom_url = data['custom_url']
+        main_url = data['main_url']
 
         current_user = User.query.filter_by(email=email).first()
         
         # Perform any necessary validation on the inputs
         
         # Generate the customized URL
-        main_url = f'https://{custom_domain}/{url_path}'
-        shortened_url = shorten_url(main_url)
+        o = urlparse(request.base_url)
+        # short_key = shorten_url(data["main_url"])
+        short_url = f"{o.netloc}/{custom_url}"
         
         new_url = Url(
+        url_code = custom_url,
+        title = data["title"],
         long_url = main_url,
-        short_url = shortened_url,
+        short_url = short_url,
         user_id = current_user.id
                     )
         new_url.save()
@@ -227,7 +243,7 @@ class UpdateUrl(Resource):
 
         return {"message":"Invalid url id"}, HTTPStatus.BAD_REQUEST 
 
-
+ 
 
 # Define the endpoint for QR code creation
 @url_namespace.route('/<int:url_id>/create_qrcode')
